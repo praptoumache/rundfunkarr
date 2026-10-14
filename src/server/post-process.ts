@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { redactLog } from "@/lib/logger";
 import {
   cancelProcessOnAbort,
   cancellableProcessOptions,
@@ -91,7 +92,10 @@ export async function runPostProcessScript(
     return `Skript ${scriptName} nicht gefunden oder nicht ausführbar.`;
   }
 
-  const jobDirectory = path.dirname(job.filePath);
+  // The script runs inside the job folder, so a relative download path must
+  // be resolved first; the mapped storage path stays as reported to the *arrs.
+  const filePath = path.resolve(job.filePath);
+  const jobDirectory = path.dirname(filePath);
   const args = [
     jobDirectory, // 1: final directory of the job
     `${job.title}.nzb`, // 2: original NZB name
@@ -113,7 +117,7 @@ export async function runPostProcessScript(
     SAB_STATUS: "Completed",
     SAB_BYTES: String(job.size),
     SAB_URL: job.url,
-    RUNDFUNKARR_FILE: job.filePath,
+    RUNDFUNKARR_FILE: filePath,
     RUNDFUNKARR_STORAGE_PATH: job.storagePath,
   };
 
@@ -163,7 +167,9 @@ export async function runPostProcessScript(
       settled = true;
       clearTimeout(timer);
       stopCancellation();
-      resolve(warning);
+      // Script output may contain credentials. Unlike the log, the history is
+      // readable without the diagnostics key, so apply the same redaction.
+      resolve(warning && redactLog(warning));
     };
 
     proc.once("error", (error) => {

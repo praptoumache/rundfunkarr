@@ -115,7 +115,8 @@ curl -s -d "Fertig: $3 ($5)" https://ntfy.sh/mein-thema
 
 - Die Ausgabe des Skripts erscheint unter **Diagnose & Protokoll**.
 - Ein Exit-Code ungleich 0 macht den Download nicht fehlerhaft. Wie in SABnzbd erscheint
-  `Exit(<Code>)` mit der letzten Ausgabezeile als Hinweis in der Historie.
+  `Exit(<Code>)` mit der letzten Ausgabezeile als Hinweis in der Historie. Zugangsdaten darin
+  werden wie im Protokoll geschwärzt.
 - Läuft ein Skript länger als 30 Minuten, wird es beendet; der Download gilt dann mit Hinweis
   als abgeschlossen.
 - Wird der Download pausiert oder abgebrochen, während das Skript läuft, endet das Skript

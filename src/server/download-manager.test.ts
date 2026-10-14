@@ -15,6 +15,7 @@ import path from "path";
 const {
   configFindUnique,
   downloadCount,
+  downloadFindMany,
   downloadFindUnique,
   downloadUpdate,
   ffmpegModuleLoaded,
@@ -24,6 +25,7 @@ const {
 } = vi.hoisted(() => ({
   configFindUnique: vi.fn(),
   downloadCount: vi.fn(),
+  downloadFindMany: vi.fn(),
   downloadFindUnique: vi.fn(),
   downloadUpdate: vi.fn(),
   ffmpegModuleLoaded: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock("@/lib/db", () => ({
     config: { findUnique: configFindUnique },
     download: {
       count: downloadCount,
+      findMany: downloadFindMany,
       findUnique: downloadFindUnique,
       update: downloadUpdate,
       updateMany: vi.fn(async () => ({ count: 1 })),
@@ -52,7 +55,9 @@ vi.mock("./ffmpeg", () => {
 vi.mock("./ytdlp", () => ({ downloadHlsStream }));
 vi.mock("./subtitle-fetch", () => ({ fetchSubtitle }));
 
+import { rememberLogSecret } from "@/lib/logger";
 import { clearSettingsCache } from "@/lib/settings";
+import { getHistory } from "@/services/download";
 import { processDownload } from "./download-manager";
 
 let testRoot: string;
@@ -505,6 +510,94 @@ describe("processDownload", () => {
     });
     // Video and subtitle sidecar are withdrawn, so the job folder is gone.
     await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps credentials printed by a failing script out of the history", async () => {
+    rememberLogSecret("remembered-pr59-secret");
+    const scripts = path.join(testRoot, "scripts");
+    await mkdir(scripts);
+    await writeFile(
+      path.join(scripts, "leak.sh"),
+      '#!/bin/sh\necho "login remembered-pr59-secret failed, api_key=synthetic-pr59-token" >&2\nexit 1\n',
+      { mode: 0o755 }
+    );
+    vi.stubEnv("POST_PROCESS_SCRIPTS_DIR", scripts);
+    configFindUnique.mockImplementation(({ where }: { where: { key: string } }) => {
+      if (where.key === "download.path") return Promise.resolve({ value: testRoot });
+      if (where.key === "download.convertToMkv") return Promise.resolve({ value: "false" });
+      if (where.key === "download.postProcessScript") return Promise.resolve({ value: "leak.sh" });
+      return Promise.resolve(null);
+    });
+    const download = {
+      id: "download-7",
+      title: "Show.S01E07",
+      category: "sonarr",
+      status: "queued",
+      url: "https://example.com/video.mp4",
+    };
+    downloadFindUnique.mockResolvedValue(download);
+    downloadUpdate.mockResolvedValue({});
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("video bytes")));
+
+    await processDownload("download-7");
+
+    // Serve the stored record through the SABnzbd and web history APIs.
+    downloadFindMany.mockResolvedValue([
+      { ...download, ...downloadUpdate.mock.lastCall![0].data, error: null },
+    ]);
+    const { slots } = await getHistory();
+    expect(slots[0]).toMatchObject({
+      status: "Completed",
+      warning: expect.stringContaining("Exit(1)"),
+    });
+    expect(slots[0].warning).not.toContain("remembered-pr59-secret");
+    expect(slots[0].warning).not.toContain("synthetic-pr59-token");
+  });
+
+  it("passes absolute paths to the script when the download path is relative", async () => {
+    const scripts = path.join(testRoot, "scripts");
+    await mkdir(scripts);
+    await writeFile(
+      path.join(scripts, "paths.sh"),
+      [
+        "#!/bin/sh",
+        'for p in "$1" "$SAB_COMPLETE_DIR" "$RUNDFUNKARR_FILE"; do',
+        '  case "$p" in /*) ;; *) echo "relative: $p"; exit 1 ;; esac',
+        "done",
+        '[ -d "$1" ] && [ -f "$RUNDFUNKARR_FILE" ] || { echo paths-not-found; exit 1; }',
+        "",
+      ].join("\n"),
+      { mode: 0o755 }
+    );
+    vi.stubEnv("POST_PROCESS_SCRIPTS_DIR", scripts);
+    configFindUnique.mockImplementation(({ where }: { where: { key: string } }) => {
+      if (where.key === "download.path")
+        return Promise.resolve({ value: path.relative(process.cwd(), testRoot) });
+      if (where.key === "download.convertToMkv") return Promise.resolve({ value: "false" });
+      if (where.key === "download.postProcessScript") return Promise.resolve({ value: "paths.sh" });
+      return Promise.resolve(null);
+    });
+    downloadFindUnique.mockResolvedValue({
+      id: "download-8",
+      title: "Show.S01E08",
+      category: "sonarr",
+      status: "queued",
+      url: "https://example.com/video.mp4",
+    });
+    downloadUpdate.mockResolvedValue({});
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("video bytes")));
+
+    await processDownload("download-8");
+
+    expect(downloadUpdate).toHaveBeenLastCalledWith({
+      where: { id: "download-8" },
+      data: expect.objectContaining({
+        status: "completed",
+        warning: null,
+        // The path reported to Sonarr/Radarr keeps its separate mapping.
+        filePath: "/mapped/downloads/sonarr/download-8/Show.S01E08.mp4",
+      }),
+    });
   });
 });
 
