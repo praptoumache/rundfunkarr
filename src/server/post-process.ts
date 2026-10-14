@@ -142,8 +142,10 @@ export async function runPostProcessScript(
     };
     const readLines = (stream: NodeJS.ReadableStream) => {
       let pending = "";
-      stream.on("data", (chunk: Buffer) => {
-        const lines = (pending + chunk.toString()).split(/\r?\n/);
+      // Keeps multibyte characters intact that are split across chunks.
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk: string) => {
+        const lines = (pending + chunk).split(/\r?\n/);
         pending = lines.pop() ?? "";
         lines.forEach(logLine);
         if (pending.length > MAX_LINE_LENGTH) {

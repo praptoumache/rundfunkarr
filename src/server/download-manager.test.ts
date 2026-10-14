@@ -459,6 +459,53 @@ describe("processDownload", () => {
       });
     }
   );
+
+  it.each([
+    ["pause", "paused"],
+    ["cancel", "cancelled"],
+  ])("does not complete the download on %s while its script runs", async (action, status) => {
+    const scripts = path.join(testRoot, "scripts");
+    const started = path.join(testRoot, "script-started");
+    const directory = path.join(testRoot, "sonarr", "download-6");
+    await mkdir(scripts);
+    await writeFile(path.join(scripts, "slow.sh"), `#!/bin/sh\ntouch "${started}"\nsleep 30\n`, {
+      mode: 0o755,
+    });
+    vi.stubEnv("POST_PROCESS_SCRIPTS_DIR", scripts);
+    configFindUnique.mockImplementation(({ where }: { where: { key: string } }) => {
+      if (where.key === "download.path") return Promise.resolve({ value: testRoot });
+      if (where.key === "download.convertToMkv") return Promise.resolve({ value: "false" });
+      if (where.key === "download.subtitleMode") return Promise.resolve({ value: "sidecar" });
+      if (where.key === "download.postProcessScript") return Promise.resolve({ value: "slow.sh" });
+      return Promise.resolve(null);
+    });
+    downloadFindUnique.mockResolvedValue({
+      id: "download-6",
+      title: "Show.S01E06",
+      category: "sonarr",
+      status: "queued",
+      url: "https://example.com/video.mp4",
+      mediaMetadata: JSON.stringify({ subtitleUrl: "https://example.com/subtitles.vtt" }),
+    });
+    downloadUpdate.mockResolvedValue({});
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("video bytes")));
+    const controller = new AbortController();
+
+    const processing = processDownload("download-6", controller.signal);
+    await vi.waitFor(() => access(started), { timeout: 5000 });
+    controller.abort(action);
+    await processing;
+
+    expect(downloadUpdate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "completed" }) })
+    );
+    expect(downloadUpdate).toHaveBeenLastCalledWith({
+      where: { id: "download-6" },
+      data: expect.objectContaining({ status }),
+    });
+    // Video and subtitle sidecar are withdrawn, so the job folder is gone.
+    await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
 
 describe("completed download folders", () => {

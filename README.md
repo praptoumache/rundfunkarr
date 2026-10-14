@@ -116,8 +116,11 @@ curl -s -d "Fertig: $3 ($5)" https://ntfy.sh/mein-thema
 - Die Ausgabe des Skripts erscheint unter **Diagnose & Protokoll**.
 - Ein Exit-Code ungleich 0 macht den Download nicht fehlerhaft. Wie in SABnzbd erscheint
   `Exit(<Code>)` mit der letzten Ausgabezeile als Hinweis in der Historie.
-- Läuft ein Skript länger als 30 Minuten, wird es beendet. Pausieren oder Abbrechen des
-  Downloads beendet es ebenfalls; die fertige Datei bleibt erhalten.
+- Läuft ein Skript länger als 30 Minuten, wird es beendet; der Download gilt dann mit Hinweis
+  als abgeschlossen.
+- Wird der Download pausiert oder abgebrochen, während das Skript läuft, endet das Skript
+  ebenfalls. Der Download wird dann nicht abgeschlossen, und die fertige Datei wird wieder
+  entfernt. Nach dem Fortsetzen wird sie neu geladen.
 - Verschiebt oder löscht das Skript die Videodatei, kann Sonarr/Radarr sie nicht mehr
   importieren.
 - Das Docker-Image basiert auf Alpine und enthält `sh` und `curl`, aber weder `bash` noch

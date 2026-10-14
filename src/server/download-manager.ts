@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getSetting, isMkvConversionEnabled } from "@/lib/settings";
 import { downloadHlsStream } from "./ytdlp";
 import { runPostProcessScript } from "./post-process";
+import { deleteSubtitleSidecar, type SubtitleArtifact } from "./subtitle-artifact";
 import { getStreamHeight, isStreamingUrl, srfUrnFromUrl } from "@/lib/stream-url";
 import * as fs from "fs/promises";
 import { createWriteStream } from "fs";
@@ -71,6 +72,7 @@ async function moveIntoCategoryDir(
 async function runConfiguredScript(
   download: { id: string; title: string; category: string; url: string },
   filePath: string,
+  subtitle: SubtitleArtifact | null,
   storagePath: string,
   size: number,
   signal: AbortSignal
@@ -86,7 +88,7 @@ async function runConfiguredScript(
     where: { id: download.id },
     data: { status: "postprocessing" },
   });
-  return runPostProcessScript(
+  const warning = await runPostProcessScript(
     script,
     {
       id: download.id,
@@ -99,6 +101,15 @@ async function runConfiguredScript(
     },
     signal
   );
+  if (signal.aborted) {
+    // Paused or cancelled while the script ran: as during conversion, the
+    // download must not complete. Withdraw the published files so nothing is
+    // left behind; resuming downloads them again.
+    await fs.unlink(filePath).catch(() => {});
+    await deleteSubtitleSidecar(subtitle && JSON.stringify(subtitle));
+    signal.throwIfAborted();
+  }
+  return warning;
 }
 
 function joinWarnings(...warnings: (string | null)[]): string | null {
@@ -214,6 +225,7 @@ async function processDownload(
       const scriptWarning = await runConfiguredScript(
         download,
         finalMkvPath,
+        artifact,
         storagePath,
         stats.size,
         signal
@@ -322,6 +334,7 @@ async function processDownload(
       const scriptWarning = await runConfiguredScript(
         download,
         finalMkvPath,
+        artifact,
         storagePath,
         stats.size,
         signal
@@ -367,6 +380,7 @@ async function processDownload(
       const scriptWarning = await runConfiguredScript(
         download,
         finalPath,
+        artifact,
         storagePath,
         stats.size,
         signal

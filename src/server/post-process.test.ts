@@ -120,6 +120,15 @@ describe("runPostProcessScript", () => {
     expect(console.log).toHaveBeenCalledWith("[Script] fail.sh: copying");
   });
 
+  it("keeps umlauts intact that arrive split across output chunks", async () => {
+    // "ä" is 0xC3 0xA4 in UTF-8; the pause separates the two bytes.
+    await script("umlaut.sh", "printf '\\303'\nsleep 0.2\nprintf '\\244rger\\n'\nexit 1");
+
+    await expect(runPostProcessScript("umlaut.sh", job)).resolves.toBe(
+      "Skript umlaut.sh: Exit(1) ärger"
+    );
+  });
+
   it.each(["../escape.sh", "missing.sh", ".hidden.sh"])("refuses %s", async (name) => {
     await writeFile(path.join(root, "escape.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     await script(".hidden.sh", "exit 0");
