@@ -410,6 +410,55 @@ describe("processDownload", () => {
       data: expect.objectContaining({ status: "completed" }),
     });
   });
+
+  it.each([
+    [0, null],
+    [2, "Skript post.sh: Exit(2) upload failed"],
+  ])(
+    "runs the post-processing script on the finished file (exit code %s)",
+    async (exitCode, warning) => {
+      const title = "Show.S01E05";
+      const scripts = path.join(testRoot, "scripts");
+      await mkdir(scripts);
+      await writeFile(
+        path.join(scripts, "post.sh"),
+        `#!/bin/sh\ncp "$RUNDFUNKARR_FILE" "$1/seen"\necho "upload failed"\nexit ${exitCode}\n`,
+        { mode: 0o755 }
+      );
+      vi.stubEnv("POST_PROCESS_SCRIPTS_DIR", scripts);
+      configFindUnique.mockImplementation(({ where }: { where: { key: string } }) => {
+        if (where.key === "download.path") return Promise.resolve({ value: testRoot });
+        if (where.key === "download.convertToMkv") return Promise.resolve({ value: "false" });
+        if (where.key === "download.postProcessScript")
+          return Promise.resolve({ value: "post.sh" });
+        return Promise.resolve(null);
+      });
+      downloadFindUnique.mockResolvedValue({
+        id: "download-5",
+        title,
+        category: "sonarr",
+        status: "queued",
+        url: "https://example.com/video.mp4",
+      });
+      downloadUpdate.mockResolvedValue({});
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("video bytes")));
+
+      await processDownload("download-5");
+
+      // The script ran after the file reached its final folder.
+      await expect(
+        readFile(path.join(testRoot, "sonarr", "download-5", "seen"), "utf8")
+      ).resolves.toBe("video bytes");
+      expect(downloadUpdate).toHaveBeenCalledWith({
+        where: { id: "download-5" },
+        data: { status: "postprocessing" },
+      });
+      expect(downloadUpdate).toHaveBeenLastCalledWith({
+        where: { id: "download-5" },
+        data: expect.objectContaining({ status: "completed", warning }),
+      });
+    }
+  );
 });
 
 describe("completed download folders", () => {
